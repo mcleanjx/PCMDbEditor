@@ -1,0 +1,6 @@
+Databasefile/
+*.cdb
+*.cdi
+*.bak
+__pycache__/
+*.pyc
