@@ -83,6 +83,8 @@ class PCMEditorApp:
         self._changes         = {}
         self._cyclist_idx: int | None = None
         self._search_results: list    = []
+        self._current_table: str | None = None
+        self._grid_cols: list           = []
 
         self.root.title('PCM Database Editor')
         self.root.geometry('1280x820')
@@ -185,6 +187,7 @@ class PCMEditorApp:
         hscr.pack(side=tk.BOTTOM, fill=tk.X)
         vscr.pack(side=tk.RIGHT,  fill=tk.Y)
         self._data_grid.pack(fill=tk.BOTH, expand=True)
+        self._data_grid.bind('<Double-1>', self._on_grid_double_click)
 
     # ── Cyclist Editor tab ────────────────────────────────────────────────────
 
@@ -386,10 +389,73 @@ class PCMEditorApp:
             self._data_grid.heading(c, text=c)
             self._data_grid.column(c, width=130, minwidth=80, stretch=False)
 
+        self._current_table = table_name
+        self._grid_cols     = cols
+
         col_data = {c: self.db.get_column(table_name, c) for c in cols}
         for i in range(limit):
             row = [_fmt_val(col_data[c][i] if i < len(col_data[c]) else None) for c in cols]
-            self._data_grid.insert('', 'end', values=row)
+            self._data_grid.insert('', 'end', iid=str(i), values=row)
+
+    def _on_grid_double_click(self, event):
+        region = self._data_grid.identify_region(event.x, event.y)
+        if region != 'cell' or not self.db or not self._current_table:
+            return
+        col_id = self._data_grid.identify_column(event.x)   # '#1', '#2', …
+        item   = self._data_grid.identify_row(event.y)
+        if not item or not col_id:
+            return
+
+        col_idx    = int(col_id[1:]) - 1
+        record_idx = int(item)
+        if col_idx < 0 or col_idx >= len(self._grid_cols):
+            return
+
+        field_name = self._grid_cols[col_idx]
+        f = self.db.tables[self._current_table]['fields'].get(field_name)
+        if not f or f['is_string']:
+            return   # string pool fields are not inline-editable
+
+        current_val = self._data_grid.set(item, col_id)
+        self._place_cell_editor(item, col_id, record_idx, field_name, f, current_val)
+
+    def _place_cell_editor(self, item, col_id, record_idx, field_name, field, current_val):
+        bbox = self._data_grid.bbox(item, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        var   = tk.StringVar(value=current_val)
+        entry = tk.Entry(self._data_grid, textvariable=var,
+                         bg=BG_CARD, fg=FG, insertbackground=FG,
+                         relief=tk.FLAT, font=('Segoe UI', 9),
+                         highlightthickness=1, highlightcolor=ACCENT)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.select_range(0, 'end')
+        entry.focus_set()
+
+        def confirm(_=None):
+            if not entry.winfo_exists():
+                return
+            raw = var.get().strip()
+            entry.destroy()
+            try:
+                new_val = float(raw) if field['is_float'] else int(raw)
+            except ValueError:
+                return
+            self.db.set_value(self._current_table, field_name, record_idx, new_val)
+            self._changes[(self._current_table, field_name, record_idx)] = new_val
+            self._change_lbl.config(text=f'⚠  {len(self._changes)} unsaved change(s)')
+            self._data_grid.set(item, col_id, _fmt_val(new_val))
+
+        def cancel(_=None):
+            if entry.winfo_exists():
+                entry.destroy()
+
+        entry.bind('<Return>',   confirm)
+        entry.bind('<Tab>',      confirm)
+        entry.bind('<Escape>',   cancel)
+        entry.bind('<FocusOut>', confirm)
 
     # ── Cyclist search ────────────────────────────────────────────────────────
 
